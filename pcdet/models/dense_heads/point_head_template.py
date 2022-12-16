@@ -11,8 +11,6 @@ class PointHeadTemplate(nn.Module):
         super().__init__()
         self.model_cfg = model_cfg
         self.num_class = num_class
-
-        self.build_losses(self.model_cfg.LOSS_CONFIG)
         self.forward_ret_dict = None
 
     def build_losses(self, losses_cfg):

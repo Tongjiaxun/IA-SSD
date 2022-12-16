@@ -30,7 +30,11 @@ class IASSD_Head(PointHeadTemplate):
             input_channels=detector_dim,
             output_channels=self.box_coder.code_size
         )
-        
+        self.contrast_encoder = self.make_fc_layers(
+            fc_cfg=self.model_cfg.CL_FC,
+            input_channels=detector_dim,
+            output_channels=128
+        )
         self.box_iou3d_layers = self.make_fc_layers(
             fc_cfg=self.model_cfg.IOU_FC,
             input_channels=detector_dim,
@@ -38,6 +42,10 @@ class IASSD_Head(PointHeadTemplate):
         ) if self.model_cfg.get('IOU_FC', None) is not None else None
 
         # self.init_weights(weight_init='xavier')
+        self.contrast_temp = self.model_cfg.LOSS_CONFIG.CONTRAST_TEMP
+        self.contrast_weight = self.model_cfg.LOSS_CONFIG.CONTRAST_WEIGHT
+        self.center_thresh = self.model_cfg.LOSS_CONFIG.CENTER_THRESH
+        self.build_losses(self.model_cfg.LOSS_CONFIG)
 
     def init_weights(self, weight_init='xavier'):
         if weight_init == 'kaiming':
@@ -117,6 +125,16 @@ class IASSD_Head(PointHeadTemplate):
                     loss_utils.SigmoidFocalClassificationLoss(
                         **losses_cfg.get('LOSS_CLS_CONFIG', {})
                     )
+                )
+            else:
+                raise NotImplementedError
+
+        # contrast_loss
+        if losses_cfg.get('LOSS_CL', None) is not None:
+            if losses_cfg.LOSS_CL.startswith('SupConLoss'):
+                self.add_module(
+                    'con_loss_func',
+                    loss_utils.SupConLoss(temperature=self.contrast_temp, center_threshold=self.center_thresh)
                 )
             else:
                 raise NotImplementedError
@@ -444,9 +462,33 @@ class IASSD_Head(PointHeadTemplate):
         if self.model_cfg.LOSS_CONFIG.get('IOU3D_REGULARIZATION', False):
             iou3d_loss, tb_dict_7 = self.get_iou3d_layer_loss()          
             tb_dict.update(tb_dict_7)
-        
-        point_loss = center_loss_reg + center_loss_cls + center_loss_box + corner_loss + sa_loss_cls + iou3d_loss             
+
+        # contrast_loss
+        if self.model_cfg.LOSS_CONFIG.get('LOSS_CL', None) is not None:
+            assert('center_features_contrast' in self.forward_ret_dict)
+            contrast_loss, tb_dict8 = self.get_center_contrast_loss()
+            tb_dict.update(tb_dict8)
+
+        point_loss = center_loss_reg + center_loss_cls + center_loss_box + corner_loss + sa_loss_cls + iou3d_loss + contrast_loss
         return point_loss, tb_dict
+
+    def get_center_contrast_loss(self, tb_dict=None):
+        points_encoder = self.forward_ret_dict['center_features_contrast']
+        labels = self.forward_ret_dict['center_cls_labels']
+        centerness_mask = self.generate_center_ness_mask()
+        contrast_loss = self.con_loss_func(points_encoder, labels, centerness_mask)
+        decay_step = self.model_cfg.LOSS_CONFIG.DECAY_STEP
+        decay_rate = self.model_cfg.LOSS_CONFIG.DECAY_RATE
+        # loss_weights_dict = self.model_cfg.LOSS_CONFIG.LOSS_WEIGHTS
+        cur_iter = self.forward_ret_dict['cur_iter']
+        if cur_iter in decay_step:
+            self.contrast_weight *= decay_rate
+            
+        contrast_loss = contrast_loss * self.contrast_weight
+        if tb_dict is None:
+            tb_dict = {}
+        tb_dict.update({'center_contrast_loss': contrast_loss.item()})
+        return contrast_loss, tb_dict
 
 
     def get_contextual_vote_loss(self, tb_dict=None):        
@@ -805,9 +847,11 @@ class IASSD_Head(PointHeadTemplate):
         center_cls_preds = self.cls_center_layers(center_features)  # (total_centers, num_class)
         center_box_preds = self.box_center_layers(center_features)  # (total_centers, box_code_size)
         box_iou3d_preds = self.box_iou3d_layers(center_features) if self.box_iou3d_layers is not None else None
+        center_features_contrast = self.contrast_encoder(center_features) # if use contrast_head
 
         ret_dict = {'center_cls_preds': center_cls_preds,
                     'center_box_preds': center_box_preds,
+                    'center_features_contrast': center_features_contrast,
                     'ctr_offsets': batch_dict['ctr_offsets'],
                     'centers': batch_dict['centers'],
                     'centers_origin': batch_dict['centers_origin'],
@@ -815,6 +859,9 @@ class IASSD_Head(PointHeadTemplate):
                     'box_iou3d_preds': box_iou3d_preds,
                     }
         if self.training:
+            ret_dict.update({'cur_iter': batch_dict['cur_iter']})
+            ret_dict.update({'cur_epoch': batch_dict['cur_epoch']})
+            ret_dict.update({'total_epochs': batch_dict['total_epochs']})
             targets_dict = self.assign_targets(batch_dict)
             ret_dict.update(targets_dict)
 

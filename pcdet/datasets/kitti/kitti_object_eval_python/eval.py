@@ -673,7 +673,7 @@ def get_official_eval_result(gt_annos, dt_annos, current_classes, PR_detail_dict
             break
     mAPbbox, mAPbev, mAP3d, mAPaos, mAPbbox_R40, mAPbev_R40, mAP3d_R40, mAPaos_R40 = do_eval(
         gt_annos, dt_annos, current_classes, min_overlaps, compute_aos, PR_detail_dict=PR_detail_dict)
-
+    result += print_str('mAP3d: {:.2f}'.format(np.mean(mAP3d[:, 1, 0])))
     ret_dict = {}
     for j, curcls in enumerate(current_classes):
         # mAP threshold array: [num_minoverlap, metric, class]

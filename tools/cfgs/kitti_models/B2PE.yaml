@@ -54,6 +54,7 @@ MODEL:
         NAME: IASSD_Head
         CLS_FC: [256, 256]
         REG_FC: [256, 256]
+        CL_FC: [256, 256]
         CLASS_AGNOSTIC: False
         USE_POINT_FEATURES_BEFORE_FUSION: False
         TARGET_CONFIG:
@@ -82,6 +83,7 @@ MODEL:
             LOSS_CLS: WeightedCrossEntropy
             LOSS_REG: WeightedSmoothL1Loss
             LOSS_INS: WeightedCrossEntropy
+            LOSS_CL: SupConLoss
             SAMPLE_METHOD_LIST: *sample_method_list
             LOSS_VOTE_TYPE: 'none'  #'none', 'ver1', 'ver2', 
 
@@ -97,7 +99,11 @@ MODEL:
                 'code_weights': [1.0, 1.0, 1.0, 1.0, 1.0, 1.0],
                 'dir_weight': 0.2
             }
-
+            CONTRAST_TEMP: 0.2
+            CONTRAST_WEIGHT: 1.5
+            CENTER_THRESH: 0.6
+            DECAY_STEP : [19797, 32170]
+            DECAY_RATE : 0.3
 
     POST_PROCESSING:
         RECALL_MODE: 'normal'  # 'normal'(default), 'detail', 'speed'(no recall info)

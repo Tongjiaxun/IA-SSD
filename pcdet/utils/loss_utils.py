@@ -515,3 +515,45 @@ class RegLossCenterNet(nn.Module):
             pred = _transpose_and_gather_feat(output, ind)
         loss = _reg_loss(pred, target, mask)
         return loss
+
+class SupConLoss(nn.Module):
+    
+    def __init__(self, temperature=0.2, center_threshold=0.5):
+        super().__init__()
+        self.temperature = temperature
+        self.center_threshold = center_threshold
+
+    def forward(self, features, labels, center_mask):
+        assert features.shape[0] == labels.shape[0]
+        # mask = (labels > 0)
+        # labels = labels[mask] 
+        # features = features[mask]       
+        if len(labels.shape) == 1:
+            labels = labels.reshape(-1, 1)
+
+        label_mask = torch.eq(labels, labels.T).float().cuda()
+
+        features = F.normalize(features, dim=1)
+        similarity = torch.div(
+            torch.matmul(features, features.T), self.temperature)
+        # for numerical stability
+        sim_row_max, _ = torch.max(similarity, dim=1, keepdim=True)
+        similarity = similarity - sim_row_max.detach()
+
+        # mask out self-contrastive
+        logits_mask = torch.ones_like(similarity)
+        logits_mask.fill_diagonal_(0)
+
+        exp_sim = torch.exp(similarity) * logits_mask
+        log_prob = similarity - torch.log(exp_sim.sum(dim=1, keepdim=True))
+
+        per_label_log_prob = (log_prob * logits_mask * label_mask).sum(1) / label_mask.sum(1)
+
+        # loss = -per_label_log_prob
+
+        keep = (center_mask > self.center_threshold)
+        per_label_log_prob = per_label_log_prob[keep]
+        loss = -per_label_log_prob
+
+        # loss = loss * center_mask[keep]
+        return loss.mean()  
